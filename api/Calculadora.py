@@ -1,14 +1,9 @@
+import html
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import parse_qs
 
-from flask import Flask, jsonify, request, send_from_directory
-from pathlib import Path
 
-# 1. Ubicacion del proyecto
-BASE_DIR = Path(__file__).resolve().parent
-
-# 2. Crear la aplicacion Flask
-app = Flask(__name__, static_folder=None)
-
-# 3. Catalogo de productos y precios
+# Catalogo de productos y precios
 PRODUCTOS = {
     "hamburguesa": {
         "nombre": "Hamburguesa Crunch",
@@ -25,90 +20,185 @@ PRODUCTOS = {
 }
 
 
-# 4. Mostrar la pagina principal
-@app.get("/")
-def inicio():
-    return send_from_directory(BASE_DIR, "Index.html")
+def pesos(valor):
+    return "$" + format(valor, ",").replace(",", ".")
 
 
-# 5. Buscar los archivos CSS
-@app.get("/css/<path:archivo>")
-def servir_css(archivo):
-    return send_from_directory(BASE_DIR / "css", archivo)
+def crear_pagina(titulo, contenido):
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{html.escape(titulo)} - CRUNCH & GO</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            background: #fff7ed;
+            margin: 0;
+            padding: 30px 15px;
+            color: #333;
+        }}
+        .contenedor {{
+            max-width: 650px;
+            margin: 30px auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 3px 12px rgba(0,0,0,0.12);
+        }}
+        h1 {{
+            color: #d35400;
+            text-align: center;
+        }}
+        .detalle {{
+            padding: 12px 0;
+            border-bottom: 1px solid #eee;
+        }}
+        .total {{
+            font-size: 24px;
+            font-weight: bold;
+            color: #d35400;
+            margin-top: 20px;
+        }}
+        .volver {{
+            display: inline-block;
+            margin-top: 25px;
+            padding: 12px 20px;
+            background: #d35400;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+        }}
+        .mensaje {{
+            background: #fff0df;
+            padding: 12px;
+            border-radius: 6px;
+        }}
+    </style>
+</head>
+<body>
+    <main class="contenedor">
+        {contenido}
+        <a class="volver" href="/">Volver a CRUNCH & GO</a>
+    </main>
+</body>
+</html>"""
 
 
-# 6. Buscar las imagenes
-@app.get("/IMG/<path:archivo>")
-def servir_imagenes(archivo):
-    return send_from_directory(BASE_DIR / "IMG", archivo)
+class handler(BaseHTTPRequestHandler):
 
+    def enviar_html(self, contenido, estado=200):
+        pagina = crear_pagina("Resultado del pedido", contenido)
+        datos = pagina.encode("utf-8")
 
-# 7. Recibir y calcular el pedido
-@app.post("/api/calcular")
-def calcular_pedido():
+        self.send_response(estado)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(datos)))
+        self.end_headers()
+        self.wfile.write(datos)
 
-    # 8. Recibir los datos enviados desde HTML
-    datos = request.get_json(silent=True)
+    def do_GET(self):
+        contenido = """
+        <h1>🍔 CRUNCH & GO</h1>
+        <p class="mensaje">
+            Para calcular tu pedido, regresa al menú y completa
+            el formulario de la calculadora.
+        </p>
+        """
+        self.enviar_html(contenido)
 
-    if not isinstance(datos, dict):
-        return jsonify({"error": "Datos incorrectos"}), 400
+    def do_POST(self):
 
-    # 9. Obtener los productos seleccionados
-    items = datos.get("items")
+        try:
+            longitud = int(self.headers.get("Content-Length", 0))
+            cuerpo = self.rfile.read(longitud).decode("utf-8")
+            formulario = parse_qs(cuerpo)
 
-    if not isinstance(items, list):
-        return jsonify({"error": "Lista de productos incorrecta"}), 400
+            productos_seleccionados = formulario.get("productos", [])
+            metodo_pago = formulario.get("pago", ["Efectivo"])[0]
 
-    # 10. Preparar el resumen y el total
-    resumen = []
-    total = 0
+            if not productos_seleccionados:
+                raise ValueError("Debes seleccionar al menos un producto.")
 
-    # 11. Recorrer cada producto
-    for item in items:
+            metodos_validos = [
+                "Efectivo",
+                "Nequi",
+                "Daviplata",
+                "Transferencia",
+                "Tarjeta"
+            ]
 
-        if not isinstance(item, dict):
-            return jsonify({"error": "Producto incorrecto"}), 400
+            if metodo_pago not in metodos_validos:
+                raise ValueError("El método de pago seleccionado no es válido.")
 
-        producto_id = item.get("id")
-        cantidad = item.get("cantidad")
+            total = 0
+            resumen = ""
 
-        # 12. Verificar que el producto exista
-        if producto_id not in PRODUCTOS:
-            return jsonify({"error": "Producto no valido"}), 400
+            for producto_id in productos_seleccionados:
 
-        # 13. Validar la cantidad
-        if isinstance(cantidad, bool) or not isinstance(cantidad, int):
-            return jsonify({"error": "Cantidad incorrecta"}), 400
+                if producto_id not in PRODUCTOS:
+                    raise ValueError("Uno de los productos seleccionados no es válido.")
 
-        if cantidad < 1 or cantidad > 99:
-            return jsonify({"error": "Cantidad fuera de rango"}), 400
+                nombre_campo = "cantidad_" + producto_id
+                cantidad_texto = formulario.get(nombre_campo, ["1"])[0]
 
-        # 14. Obtener los datos del producto
-        producto = PRODUCTOS[producto_id]
+                try:
+                    cantidad = int(cantidad_texto)
+                except ValueError:
+                    raise ValueError("Las cantidades deben ser números enteros.")
 
-        # 15. Calcular el subtotal
-        subtotal = producto["precio"] * cantidad
+                if cantidad < 1 or cantidad > 99:
+                    raise ValueError("Cada cantidad debe estar entre 1 y 99.")
 
-        # 16. Acumular el total
-        total += subtotal
+                producto = PRODUCTOS[producto_id]
+                subtotal = producto["precio"] * cantidad
+                total += subtotal
 
-        # 17. Guardar el producto en el resumen
-        resumen.append({
-            "id": producto_id,
-            "nombre": producto["nombre"],
-            "precio": producto["precio"],
-            "cantidad": cantidad,
-            "subtotal": subtotal
-        })
+                resumen += f"""
+                <div class="detalle">
+                    <strong>{html.escape(producto["nombre"])}</strong><br>
+                    Cantidad: {cantidad}<br>
+                    Precio unitario: {pesos(producto["precio"])}<br>
+                    Subtotal: {pesos(subtotal)}
+                </div>
+                """
 
-    # 18. Enviar el resultado a HTML
-    return jsonify({
-        "productos": resumen,
-        "total": total,
-        "moneda": "COP"
-    })
+            contenido = f"""
+            <h1>🍔 ¡Tu pedido está listo!</h1>
 
+            <p>Este es el resumen de tu pedido en CRUNCH & GO:</p>
 
-# 19. Iniciar el servidor
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+            {resumen}
+
+            <div class="detalle">
+                <strong>Método de pago:</strong>
+                {html.escape(metodo_pago)}
+            </div>
+
+            <p class="total">Total a pagar: {pesos(total)}</p>
+
+            <p class="mensaje">
+                Gracias por elegir CRUNCH & GO.
+                ¡Esperamos que disfrutes tu pedido!
+            </p>
+            """
+
+            self.enviar_html(contenido)
+
+        except ValueError as error:
+            contenido = f"""
+            <h1>No pudimos calcular tu pedido</h1>
+            <p class="mensaje">{html.escape(str(error))}</p>
+            """
+            self.enviar_html(contenido, 400)
+
+        except Exception:
+            contenido = """
+            <h1>Ocurrió un inconveniente</h1>
+            <p class="mensaje">
+                No fue posible procesar el pedido.
+                Regresa al formulario e inténtalo nuevamente.
+            </p>
+            """
+            self.enviar_html(contenido, 500)
